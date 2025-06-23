@@ -39,8 +39,10 @@ def main(args):
     :return: The code uppon termination.
     """
     app = GRSDemodulator()
-    return app.run()
 
+    app.start()
+
+    return app.run()
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv))
