@@ -22,6 +22,7 @@
 
 import numpy as np
 from scipy.signal import upfirdn, lfilter
+from .timing_sync.timing_sync import TimeSync
 
 _GMSK_DEFAULT_OVERSAMPLING_FACTOR = 100
 
@@ -169,13 +170,22 @@ class GMSK:
         gaussian_filter = self._gaussian_filter(3 * sps, sps)
         filtered_signal = np.convolve(freq_deviation, gaussian_filter, mode='same')
 
-        # Downsample to symbol rate
-        sampled_signal = filtered_signal[sps // 2 :: sps]
-
+        # Normalization
+        filtered_signal = self._normalize(filtered_signal)
+        
+        print(filtered_signal[:8])
+        print(np.mean(filtered_signal))
+        
+        # Timing recovery
+        time_sync = TimeSync(samp_rate=fs, baud=self._baudrate)
+        raw_symbols = np.array(time_sync.get_bitstream(filtered_signal))
+                
         # Decision thresholding
-        demodulated_bits = (sampled_signal > 0).astype(int)
+        demodulated_bits = (raw_symbols > 0).astype(int)
+        
+        return list(demodulated_bits), raw_symbols
 
-        return list(demodulated_bits), sampled_signal
+
 
     def _frequency_discriminator(self, iq_samples):
         """
@@ -191,16 +201,54 @@ class GMSK:
 
         return np.concatenate([[0], freq_deviation])    # Keep length consistent
 
-    def _gaussian_filter(self, L, sps):
+    def _gaussian_filter(self, sps, span=3):
         """
         Generate a Gaussian matched filter.
 
-        :param L: TODO
+        :param span: TODO
 
         :return res: TODO
         """
+        t = np.arange(-span*sps, span*sps + 1)
         alpha = np.sqrt(np.log(2)) / (self._bt * sps)
-        t = np.arange(-L, L + 1)
-        g = np.exp(-0.5 * (alpha * t) ** 2)
+        h = np.exp(-0.5 * (alpha * t) ** 2)
+        return h / np.sum(h)
+    
+    def _bit_list_to_int_list(self, b):
+        """
+        Converts a list of bits to a list of integers (bytes)
+        
+        :param b: The list of bits
+        :return res: The list of integers for the given list of bits
+        """
+    
+        return [int("".join(map(str, b[i:i+8])), 2) for i in range(0, len(b), 8)]
 
-        return g / np.sum(g)
+    def _slice(self, x):
+        """
+        Hard decision slicer: real → {0,1}
+        """
+        return (x >= 0).astype(int)
+    
+    def _normalize(self, x):
+        """
+        Normalizes sample
+        """
+        x = x - np.mean(x)
+        s = np.std(x)
+        if s == 0:
+            return x
+        else:
+            return x/s
+    
+    def _remove_matched_filter_delay(self, x, sps, span):
+        """
+        Removes group delay introduced by the Gaussian matched filter.
+        """
+        delay = span * sps
+        if len(x) <= 2 * delay:
+            return x
+        return x[delay:-delay]
+
+
+    

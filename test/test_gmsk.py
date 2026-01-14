@@ -22,11 +22,11 @@
 
 import random
 
-from gmsk import GMSK
+from grs_demodulator.gmsk import GMSK
 
-def test_modulator_demodulator():
+def test_modulator_demodulator(verbose = False):
     data = [random.randint(0, 255) for _ in range(1000)]
-
+    
     gmsk = GMSK(0.5, 4800)
 
     samples, fs, dur = gmsk.modulate(data)
@@ -42,5 +42,12 @@ def test_modulator_demodulator():
             result = result | (demod_bits[i + j] << pos)
             pos -= 1
         data_res.append(result)
+        
+    if verbose:
+        print(f"Original data:  {data[:10]}")
+        print(f"Demodulated data:  {data_res[:10]}")
 
     assert data == data_res
+        
+if __name__ == "__main__":
+    test_modulator_demodulator(True)

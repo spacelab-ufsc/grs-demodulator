@@ -1,3 +1,4 @@
-python3-zmq==25.1.1
+numpy==2.3.5
+pyzmq==25.1.1
 scipy==1.15.2
 setuptools==69.2.0
