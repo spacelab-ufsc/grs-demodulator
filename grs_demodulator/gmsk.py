@@ -167,23 +167,20 @@ class GMSK:
         freq_deviation = self._frequency_discriminator(iq_samples)
 
         # Apply Gaussian matched filter
-        gaussian_filter = self._gaussian_filter(3 * sps, sps)
+        gaussian_filter = self._gaussian_filter(sps, span = 1, bt = 2)
         filtered_signal = np.convolve(freq_deviation, gaussian_filter, mode='same')
 
         # Normalization
         filtered_signal = self._normalize(filtered_signal)
         
-        print(filtered_signal[:8])
-        print(np.mean(filtered_signal))
-        
         # Timing recovery
         time_sync = TimeSync(samp_rate=fs, baud=self._baudrate)
-        raw_symbols = np.array(time_sync.get_bitstream(filtered_signal))
+        soft_symbols = np.array(time_sync.get_bitstream(filtered_signal))
                 
         # Decision thresholding
-        demodulated_bits = (raw_symbols > 0).astype(int)
+        demod_bits = (soft_symbols > 0).astype(int)
         
-        return list(demodulated_bits), raw_symbols
+        return list(demod_bits), soft_symbols, filtered_signal
 
 
 
@@ -201,7 +198,7 @@ class GMSK:
 
         return np.concatenate([[0], freq_deviation])    # Keep length consistent
 
-    def _gaussian_filter(self, sps, span=3):
+    def _gaussian_filter(self, sps, span, bt):
         """
         Generate a Gaussian matched filter.
 
@@ -209,8 +206,10 @@ class GMSK:
 
         :return res: TODO
         """
+        _bt = self._bt if bt is None else bt
+        
         t = np.arange(-span*sps, span*sps + 1)
-        alpha = np.sqrt(np.log(2)) / (self._bt * sps)
+        alpha = np.sqrt(np.log(2)) / (_bt * sps)
         h = np.exp(-0.5 * (alpha * t) ** 2)
         return h / np.sum(h)
     
@@ -236,10 +235,9 @@ class GMSK:
         """
         x = x - np.mean(x)
         s = np.std(x)
-        if s == 0:
-            return x
-        else:
+        if s != 0:
             return x/s
+        return x
     
     def _remove_matched_filter_delay(self, x, sps, span):
         """
