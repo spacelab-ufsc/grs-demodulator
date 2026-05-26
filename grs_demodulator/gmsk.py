@@ -21,15 +21,16 @@
 #
 
 import numpy as np
-from scipy.signal import upfirdn, lfilter
-from .timing_sync.timing_sync import TimeSync
+from scipy.signal import upfirdn, lfilter, convolve
 
 _GMSK_DEFAULT_OVERSAMPLING_FACTOR = 100
+
 
 class GMSK:
     """
     GMSK modulator.
     """
+
     def __init__(self, bt, baud):
         """
         Constructor.
@@ -52,7 +53,7 @@ class GMSK:
         :return: dur: Signal duration in seconds
         """
         I, Q, fs, dur = self.get_iq(data, L)
-        s_complex = I + 1j*Q    # Complex baseband representation
+        s_complex = I + 1j * Q  # Complex baseband representation
 
         return s_complex, fs, dur
 
@@ -74,25 +75,29 @@ class GMSK:
         data = np.array(data)
 
         # Timing parameters
-        fc = self._baudrate                         # Carrier frequency = Data transfer rate in bps
-        fs = L*fc                                   # Sample frequency in Hz
-        Ts = np.float64(1.0)/fs                     # Sample period in seconds
-        Tb = L*Ts                                   # Bit period in seconds
+        fc = self._baudrate  # Carrier frequency = Data transfer rate in bps
+        fs = L * fc  # Sample frequency in Hz
+        Ts = np.float64(1.0) / fs  # Sample period in seconds
+        Tb = L * Ts  # Bit period in seconds
 
-        c_t = upfirdn(h=[1]*L, x=2*data-1, up = L)  # NRZ pulse train c(t)
-        k = 1                                       # Truncation length for Gaussian LPF
-        h_t = self._gaussian_lpf(Tb, L, k)          # Gaussian LPF
-        b_t = np.convolve(h_t, c_t, 'full')         # Convolve c(t) with Gaussian LPF to get b(t)
-        bnorm_t = b_t/np.max(np.abs(b_t))           # Normalize the output of Gaussian LPF to +/-1
+        c_t = upfirdn(h=[1] * L, x=2 * data - 1, up=L)  # NRZ pulse train c(t)
+        k = 1  # Truncation length for Gaussian LPF
+        h_t = self._gaussian_lpf(Tb, L, k)  # Gaussian LPF
+        b_t = np.convolve(
+            h_t, c_t, "full"
+        )  # Convolve c(t) with Gaussian LPF to get b(t)
+        bnorm_t = b_t / np.max(
+            np.abs(b_t)
+        )  # Normalize the output of Gaussian LPF to +/-1
 
         # Integrate to get phase information
-        h = np.float64(0.5)                         # Modulation index (GMSK = 0.5)
-        phi_t = lfilter(b = [1], a=[1,-1], x=bnorm_t*Ts) * h*np.pi/Tb
+        h = np.float64(0.5)  # Modulation index (GMSK = 0.5)
+        phi_t = lfilter(b=[1], a=[1, -1], x=bnorm_t * Ts) * h * np.pi / Tb
         I = np.cos(phi_t)
-        Q = np.sin(phi_t)                           # Cross-correlated baseband I/Q signals
+        Q = np.sin(phi_t)  # Cross-correlated baseband I/Q signals
 
         # Sampling values
-        dur = len(data)*Tb                          # Transmission duration in seconds
+        dur = len(data) * Tb  # Transmission duration in seconds
 
         return I, Q, fs, dur
 
@@ -109,48 +114,16 @@ class GMSK:
         """
         I, Q, samp, dur = self.get_iq(data, L)
 
-        fc = self._baudrate                         # Carrier frequency = Data transfer rate in bps
-        fs = L*fc
-        Ts = 1/fs
+        fc = self._baudrate  # Carrier frequency = Data transfer rate in bps
+        fs = L * fc
+        Ts = 1 / fs
 
-        t = Ts*np.arange(start=0, stop=len(I))      # Time base for RF carrier
-        sI_t = I*np.cos(2*np.pi*fc*t)
-        sQ_t = Q*np.sin(2*np.pi*fc*t)
-        s_t = sI_t - sQ_t                           # s(t) - GMSK with RF carrier
+        t = Ts * np.arange(start=0, stop=len(I))  # Time base for RF carrier
+        sI_t = I * np.cos(2 * np.pi * fc * t)
+        sQ_t = Q * np.sin(2 * np.pi * fc * t)
+        s_t = sI_t - sQ_t  # s(t) - GMSK with RF carrier
 
         return s_t, t, samp, dur
-
-    def _gaussian_lpf(self, Tb, L, k):
-        """
-        Generate filter coefficients of Gaussian low pass filter (used in gmsk_mod).
-
-        :param Tb: bit period
-        :param L: oversampling factor (number of samples per bit)
-        :param k: span length of the pulse (bit interval)
-
-        :return h_norm: normalized filter coefficients of Gaussian LPF
-        """
-        B = self._bt/Tb     # Bandwidth of the filter
-        # Truncated time limits for the filter
-        t = np.arange(start = -k*Tb, stop = k*Tb + Tb/L, step = Tb/L)
-        h = B*np.sqrt(2*np.pi/(np.log(2)))*np.exp(-2 * (t*np.pi*B)**2 /(np.log(2)))
-        h_norm = h / np.sum(h)
-        return h_norm
-
-    def _int_list_to_bit_list(self, n):
-        """
-        Converts a integer list (bytes) to a bit list.
-
-        :param n: An integer list.
-
-        :return res: The given integer list as a bit list
-        """
-        res = list()
-        
-        for i in n:
-            res = res + [int(digit) for digit in bin(i)[2:].zfill(8)]
-
-        return res
 
     def demodulate(self, fs, iq_samples):
         """
@@ -161,92 +134,101 @@ class GMSK:
 
         :return res: TODO
         """
-        sps = int(fs/self._baudrate)
+        sps = int(fs / self._baudrate)
 
-        # Frequency discriminator
-        freq_deviation = self._frequency_discriminator(iq_samples)
+        # Applies the gain of quadrature demod following the equation: gain = fs / (2π * deviation)
+        gain = fs / (0.5 * np.pi * self._baudrate)
 
-        # Apply Gaussian matched filter
-        gaussian_filter = self._gaussian_filter(sps, span = 1, bt = 2)
-        filtered_signal = np.convolve(freq_deviation, gaussian_filter, mode='same')
+        freq_deviation = np.angle(iq_samples[1:] * np.conj(iq_samples[:-1]))
 
-        # Normalization
-        filtered_signal = self._normalize(filtered_signal)
-        
-        # Timing recovery
-        time_sync = TimeSync(samp_rate=fs, baud=self._baudrate)
-        soft_symbols = np.array(time_sync.get_bitstream(filtered_signal))
-                
-        # Decision thresholding
-        demod_bits = (soft_symbols > 0).astype(int)
-        
-        return list(demod_bits), soft_symbols, filtered_signal
+        freq_deviation = gain * np.concatenate(
+            [[0], freq_deviation]
+        )  # Keep length consistent
 
+        freq_deviation -= np.mean(freq_deviation)
 
+        # Apply matched filter
+        g = self._gaussian_matched_filter(1, sps, 1)
+        soft_symbols = convolve(freq_deviation, g, "same")
+
+        return soft_symbols, freq_deviation
+
+    def _gaussian_lpf(self, Tb, L, k):
+        """
+        Generate filter coefficients of Gaussian low pass filter.
+
+        :param Tb: bit period
+        :type: float
+
+        :param L: oversampling factor (number of samples per bit)
+        :type: int
+
+        :param k: span length of the pulse (bit interval)
+        :type: float
+
+        :return h_norm: normalized filter coefficients of Gaussian LPF
+        :rtype: list
+        """
+        B = self._bt / Tb  # Bandwidth of the filter
+        # Truncated time limits for the filter
+        t = np.arange(start=-k * Tb, stop=k * Tb + Tb / L, step=Tb / L)
+        h = (
+            B
+            * np.sqrt(2 * np.pi / (np.log(2)))
+            * np.exp(-2 * (t * np.pi * B) ** 2 / (np.log(2)))
+        )
+        h_norm = h / np.sum(h)
+        return h_norm
+
+    def _gaussian_matched_filter(self, Tb, sps, span):
+        """
+        Generate a Gaussian matched filter.
+
+        :param L: Span of the underlying gaussian filter.
+
+        :param sps: samples per symbol.
+
+        :return: gaussian matched filter.
+        """
+        h = self._gaussian_lpf(Tb, sps, span)
+        nrz = np.ones(sps)
+        g = convolve(h, nrz, mode="full")
+
+        return g / np.sum(g)
 
     def _frequency_discriminator(self, iq_samples):
         """
         Extract frequency deviations using phase changes in IQ samples.
 
-        :param iq_samples: TODO
+        :param iq_samples: IQ samples.
 
-        :return res: TODO
+        :return: frequency deviation of the samples.
         """
-        phase = np.angle(iq_samples)                    # Extract phase
-        unwrapped_phase = np.unwrap(phase)              # Unwrap to avoid phase discontinuities
-        freq_deviation = np.diff(unwrapped_phase)       # Phase derivative
+        freq_deviation = np.angle(iq_samples[1:] * np.conj(iq_samples[:-1]))
 
-        return np.concatenate([[0], freq_deviation])    # Keep length consistent
+        return np.concatenate([[0], freq_deviation])  # Keep length consistent
 
-    def _gaussian_filter(self, sps, span, bt):
-        """
-        Generate a Gaussian matched filter.
-
-        :param span: TODO
-
-        :return res: TODO
-        """
-        _bt = self._bt if bt is None else bt
-        
-        t = np.arange(-span*sps, span*sps + 1)
-        alpha = np.sqrt(np.log(2)) / (_bt * sps)
-        h = np.exp(-0.5 * (alpha * t) ** 2)
-        return h / np.sum(h)
-    
     def _bit_list_to_int_list(self, b):
         """
         Converts a list of bits to a list of integers (bytes)
-        
+
         :param b: The list of bits
         :return res: The list of integers for the given list of bits
         """
-    
-        return [int("".join(map(str, b[i:i+8])), 2) for i in range(0, len(b), 8)]
 
-    def _slice(self, x):
-        """
-        Hard decision slicer: real → {0,1}
-        """
-        return (x >= 0).astype(int)
-    
-    def _normalize(self, x):
-        """
-        Normalizes sample
-        """
-        x = x - np.mean(x)
-        s = np.std(x)
-        if s != 0:
-            return x/s
-        return x
-    
-    def _remove_matched_filter_delay(self, x, sps, span):
-        """
-        Removes group delay introduced by the Gaussian matched filter.
-        """
-        delay = span * sps
-        if len(x) <= 2 * delay:
-            return x
-        return x[delay:-delay]
+        return [int("".join(map(str, b[i : i + 8])), 2) for i in range(0, len(b), 8)]
 
+    def _int_list_to_bit_list(self, n):
+        """
+        Converts a integer list (bytes) to a bit list.
 
-    
+        :param n: An integer list.
+
+        :return res: The given integer list as a bit list
+        """
+        res = list()
+
+        for i in n:
+            res = res + [int(digit) for digit in bin(i)[2:].zfill(8)]
+
+        return res
