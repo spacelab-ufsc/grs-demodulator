@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
 
 #
-#  time_sync.py
-#  
+#  mm.py
+#
 #  Copyright The SpaceLab-Decoder Contributors.
-#  
+#
 #  This file is part of SpaceLab-Decoder.
 #
 #  SpaceLab-Decoder is free software; you can redistribute it
 #  and/or modify it under the terms of the GNU General Public License as
 #  published by the Free Software Foundation, either version 3 of the
 #  License, or (at your option) any later version.
-#  
+#
 #  SpaceLab-Decoder is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #  GNU General Public License for more details.
-#  
+#
 #  You should have received a copy of the GNU General Public
 #  License along with SpaceLab-Decoder; if not, see <http://www.gnu.org/licenses/>.
-#  
+#
 #
 
 import numpy as np
@@ -29,9 +29,9 @@ _TIME_SYNC_DEFAULT_BAUDRATE_BPS = 1200
 _TIME_SYNC_INITIAL_MU = 0.5
 _TIME_SYNC_GAIN = 0.001
 
-class TimeSync:
+class MM:
     """
-    Time Synchronization.
+    Mueller and Muller Time Synchronization.
     """
 
     def __init__(self, samp_rate=_TIME_SYNC_DEFAULT_SAMPLE_RATE_HZ, baud=_TIME_SYNC_DEFAULT_BAUDRATE_BPS):
@@ -110,34 +110,23 @@ class TimeSync:
         i_out = 2   # Output index (let first two outputs be 0)
 
         while i_out < len(samples) and i_in + 1 < len(samples):
-            # 1. Grab sample
-            out[i_out] = samples[i_in + int(mu)] 
+            out[i_out] = samples[i_in + int(mu)]  # grab what we think is the "best" sample
+            out_rail[i_out] = int(np.real(out[i_out]) > 0) + 1j * int(np.imag(out[i_out]) > 0)
 
-            # 2. Internal decision making (Force -1/+1 for the math)
-            # If sample > 0, use +1.0. Else, use -1.0.
-            if np.real(out[i_out]) > 0:
-                math_decision = 1.0
-            else:
-                math_decision = -1.0
-            
-            out_rail[i_out] = math_decision + 0j
-
-            # 3. Error Calculation (Now works for 0)
-            # When decision is -1, this multiplies by -1 instead of 0.
             x = (out_rail[i_out] - out_rail[i_out - 2]) * np.conj(out[i_out - 1])
             y = (out[i_out] - out[i_out - 2]) * np.conj(out_rail[i_out - 1])
-            mm_val = np.real(y - x)
-            
-            # 4. Update Loop
-            mu += self._sps + gain * mm_val
-            i_in += int(np.floor(mu))   
-            mu = mu - np.floor(mu)      
-            i_out += 1                  
 
-        # 5. FINAL OUTPUT (Convert back to 0/1 for your Demodulator)
-        # We slice the valid part and turn -1/+1 back into 0/1
-        return [1 if x.real > 0 else 0 for x in out[2:i_out]]
-    
+            mm_val = np.real(y - x)
+            mu += self._sps + gain * mm_val
+
+            i_in += int(np.floor(mu))   # Round down to nearest int since we are using it as an index
+            mu = mu - np.floor(mu)      # Remove the integer part of mu
+            i_out += 1                  # Increment output index
+
+        out = out[2:i_out]  # Remove the first two, and anything after i_out (that was never filled out)
+
+        return [1 if symbol.real > 0 else 0 for symbol in out]  # Binary slicer
+
     def reset(self):
         """
         Resets the decoder.
