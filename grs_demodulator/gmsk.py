@@ -148,7 +148,7 @@ class GMSK:
         freq_deviation -= np.mean(freq_deviation)
 
         # Apply matched filter
-        g = self._gaussian_matched_filter(1, sps, 1)
+        g = self._gaussian_matched_filter(1/self._baudrate, sps, 1)
         soft_symbols = convolve(freq_deviation, g, "same")
 
         return soft_symbols, freq_deviation
